@@ -375,6 +375,68 @@ body {
   display: block;
 }
 
+/* Radio Buttons */
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.radio-label {
+  cursor: pointer;
+  position: relative;
+  padding-left: 28px;
+  display: flex;
+  align-items: center;
+}
+
+.radio-label input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.radio-checkmark {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 50%;
+  transition: var(--transition);
+}
+
+.radio-label input[type="radio"]:checked ~ .radio-checkmark {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+}
+
+.radio-checkmark::after {
+  content: '';
+  position: absolute;
+  display: none;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  background: white;
+  border-radius: 50%;
+}
+
+.radio-label input[type="radio"]:checked ~ .radio-checkmark::after {
+  display: block;
+}
+
+.radio-label:hover .radio-checkmark {
+  border-color: var(--accent-primary);
+}
+
+
 /* Preview Section */
 .preview-section {
   grid-column: 2;

@@ -181,8 +181,13 @@ def load_stl_file(input_path):
     return mesh
 
 
-def parse_3mf_model_xml(model_path):
-    """Parse 3dmodel.model XML and extract mesh data with components and build"""
+def parse_3mf_model_xml(model_path, temp_dir=None):
+    """Parse 3dmodel.model XML and extract mesh data with components and build
+    
+    Args:
+        model_path: Path to the main 3dmodel.model file
+        temp_dir: Temporary directory containing extracted 3MF contents (for external objects)
+    """
     debug_print(f"Parsing 3MF model XML: {model_path}")
     
     try:
@@ -244,6 +249,56 @@ def parse_3mf_model_xml(model_path):
                     'vertices': vertices,
                     'triangles': triangles
                 }
+        
+        # Load external object files (BambuStudio/modern slicers)
+        if temp_dir:
+            objects_dir = os.path.join(temp_dir, '3D', 'Objects')
+            if os.path.exists(objects_dir):
+                debug_print(f"Checking for external object files in: {objects_dir}")
+                for obj_file in os.listdir(objects_dir):
+                    if obj_file.endswith('.model'):
+                        obj_path = os.path.join(objects_dir, obj_file)
+                        debug_print(f"Parsing external object file: {obj_file}")
+                        
+                        try:
+                            obj_tree = ET.parse(obj_path)
+                            obj_root = obj_tree.getroot()
+                            
+                            # Parse objects in this external file
+                            for obj in obj_root.findall('.//ns:object', ns):
+                                obj_id = obj.get('id')
+                                obj_type = obj.get('type')
+                                debug_print(f"  External object id={obj_id} type={obj_type}")
+                                
+                                mesh_elem = obj.find('ns:mesh', ns)
+                                if mesh_elem is not None:
+                                    vertices = []
+                                    vertices_elem = mesh_elem.find('ns:vertices', ns)
+                                    if vertices_elem is not None:
+                                        for vertex in vertices_elem.findall('ns:vertex', ns):
+                                            x = float(vertex.get('x', 0))
+                                            y = float(vertex.get('y', 0))
+                                            z = float(vertex.get('z', 0))
+                                            vertices.append((x, y, z))
+                                    
+                                    triangles = []
+                                    triangles_elem = mesh_elem.find('ns:triangles', ns)
+                                    if triangles_elem is not None:
+                                        for triangle in triangles_elem.findall('ns:triangle', ns):
+                                            v1 = int(triangle.get('v1', 0))
+                                            v2 = int(triangle.get('v2', 0))
+                                            v3 = int(triangle.get('v3', 0))
+                                            triangles.append((v1, v2, v3))
+                                    
+                                    if len(vertices) > 0 and len(triangles) > 0:
+                                        objects_dict[obj_id] = {
+                                            'type': 'mesh',
+                                            'vertices': vertices,
+                                            'triangles': triangles
+                                        }
+                                        debug_print(f"  Loaded external object {obj_id}: {len(vertices)} vertices, {len(triangles)} triangles")
+                        except Exception as e:
+                            debug_print(f"  Failed to parse {obj_file}: {e}")
         
         # Second pass: process build section to get instances
         meshes_data = []
@@ -370,7 +425,8 @@ def load_3mf_file(input_path):
             if os.path.exists(model_file):
                 debug_print(f"No STL files found, parsing XML: {model_file}")
                 
-                meshes_data = parse_3mf_model_xml(model_file)
+                # Pass temp_dir so parser can find external object files
+                meshes_data = parse_3mf_model_xml(model_file, temp_dir)
                 
                 if len(meshes_data) == 0:
                     raise Exception("No mesh data found in 3MF XML")
@@ -403,12 +459,13 @@ def load_3mf_file(input_path):
             debug_print(f"Failed to clean up temp directory: {temp_dir}")
 
 
-def convert(input_path, output_path, tolerance=0.01, repair=True, info_only=False, input_format='stl', skip_face_merge=False):
+def convert(input_path, output_path, tolerance=0.01, repair=True, info_only=False, input_format='stl', skip_face_merge=False, output_format='step'):
     debug_print("="*60)
     debug_print(f"CONVERSION STARTED")
     debug_print(f"Input: {input_path}")
     debug_print(f"Output: {output_path}")
-    debug_print(f"Format: {input_format}")
+    debug_print(f"Input Format: {input_format}")
+    debug_print(f"Output Format: {output_format}")
     debug_print(f"Tolerance: {tolerance}")
     debug_print(f"Repair: {repair}")
     debug_print(f"Skip Face Merge: {skip_face_merge}")
@@ -419,6 +476,7 @@ def convert(input_path, output_path, tolerance=0.01, repair=True, info_only=Fals
         "input": input_path,
         "output": output_path,
         "input_format": input_format,
+        "output_format": output_format,
         "tolerance": tolerance
     }
 
@@ -480,121 +538,152 @@ def convert(input_path, output_path, tolerance=0.01, repair=True, info_only=Fals
         result["success"] = True
         clean_exit(result)
 
-    debug_print("Creating FreeCAD document...")
-    doc = FreeCAD.newDocument("Job")
-
-    # Convert each mesh to a solid
-    solids = []
-    shapes = []
-    
-    for i, mesh in enumerate(processed_meshes):
-        debug_print(f"Converting mesh {i+1} to shape...")
-        debug_print(f"Processing {mesh.CountFacets} facets (THIS MAY TAKE SEVERAL MINUTES)...")
+    # Export based on output format
+    if output_format.lower() == 'stl':
+        # For STL output, combine all meshes and export directly
+        debug_print("Exporting to STL format...")
         
-        # For mesh-to-shape conversion, use a more relaxed tolerance to create fewer faces
-        # Multiply user tolerance by 5 to reduce over-tessellation
-        shape_tolerance = tolerance * 5.0
-        debug_print(f"Using shape conversion tolerance: {shape_tolerance}")
+        if len(processed_meshes) == 1:
+            combined_mesh = processed_meshes[0]
+        else:
+            debug_print(f"Combining {len(processed_meshes)} meshes...")
+            combined_mesh = Mesh.Mesh()
+            for mesh in processed_meshes:
+                combined_mesh.addMesh(mesh)
+            debug_print("Meshes combined successfully")
         
-        shape = Part.Shape()
-        shape.makeShapeFromMesh(mesh.Topology, shape_tolerance)
-        debug_print(f"Shape {i+1} conversion complete!")
+        debug_print(f"Writing STL to: {output_path}")
+        combined_mesh.write(output_path)
+        
+        if not os.path.exists(output_path):
+            debug_print("ERROR: STL file was not created")
+            result["error"] = "STL export failed"
+            clean_exit(result)
+        
+        output_size = os.path.getsize(output_path)
+        debug_print(f"SUCCESS! STL file created: {output_size} bytes")
+        
+        result["success"] = True
+        result["output_size"] = output_size
+        result["is_solid"] = False  # STL is mesh format
+        
+    else:
+        # STEP output - create solids using FreeCAD
+        debug_print("Creating FreeCAD document for STEP export...")
+        doc = FreeCAD.newDocument("Job")
 
-        debug_print(f"Attempting to create solid {i+1}...")
+        # Convert each mesh to a solid
+        solids = []
+        shapes = []
+        
+        for i, mesh in enumerate(processed_meshes):
+            debug_print(f"Converting mesh {i+1} to shape...")
+            debug_print(f"Processing {mesh.CountFacets} facets (THIS MAY TAKE SEVERAL MINUTES)...")
+            
+            # For mesh-to-shape conversion, use a more relaxed tolerance to create fewer faces
+            # Multiply user tolerance by 5 to reduce over-tessellation
+            shape_tolerance = tolerance * 5.0
+            debug_print(f"Using shape conversion tolerance: {shape_tolerance}")
+            
+            shape = Part.Shape()
+            shape.makeShapeFromMesh(mesh.Topology, shape_tolerance)
+            debug_print(f"Shape {i+1} conversion complete!")
+
+            debug_print(f"Attempting to create solid {i+1}...")
+            try:
+                solid = Part.makeSolid(shape)
+                
+                # Merge planar faces on this solid NOW (before compound)
+                if not skip_face_merge and mesh.CountFacets <= 100000:
+                    debug_print(f"Merging planar faces for solid {i+1}...")
+                    # Use more aggressive tolerance for merging - multiply by 10
+                    merge_tolerance = tolerance * 10.0
+                    debug_print(f"Using merge tolerance: {merge_tolerance}")
+                    solid, merged = merge_planar_faces(solid, merge_tolerance)
+                    if merged:
+                        debug_print(f"Solid {i+1} faces merged successfully")
+                elif skip_face_merge:
+                    debug_print(f"Skipping face merge for solid {i+1} (skip_face_merge=True)")
+                
+                solids.append(solid)
+                debug_print(f"Successfully created solid {i+1}")
+            except Exception as e:
+                debug_print(f"Could not create solid {i+1}: {e}, using shell instead")
+                shapes.append(shape)
+
+        # Create final object
+        if len(solids) > 0 and len(shapes) == 0:
+            # All meshes converted to solids
+            result["is_solid"] = True
+            if len(solids) == 1:
+                final = solids[0]
+                debug_print("Using single solid")
+            else:
+                # Create compound of all solids
+                debug_print(f"Creating compound of {len(solids)} solids...")
+                final = Part.makeCompound(solids)
+                debug_print("Compound created")
+        elif len(shapes) > 0 and len(solids) == 0:
+            # No solids, using shells
+            result["is_solid"] = False
+            if len(shapes) == 1:
+                final = shapes[0]
+                debug_print("Using single shell")
+            else:
+                debug_print(f"Creating compound of {len(shapes)} shells...")
+                final = Part.makeCompound(shapes)
+        else:
+            # Mixed solids and shells
+            result["is_solid"] = False
+            all_objects = solids + shapes
+            if len(all_objects) == 1:
+                final = all_objects[0]
+            else:
+                debug_print(f"Creating compound of {len(all_objects)} objects...")
+                final = Part.makeCompound(all_objects)
+
+        # For multi-object 3MF, faces were already merged per-solid
+        # Only try compound-level merge for single objects
+        if not skip_face_merge and len(processed_meshes) == 1 and total_facets <= 100000:
+            merge_tolerance = tolerance * 10.0
+            debug_print(f"Single object - merging with tolerance: {merge_tolerance}")
+            final, merged_ok = merge_planar_faces(final, merge_tolerance)
+            result["merged_planar_faces"] = merged_ok
+        elif skip_face_merge:
+            debug_print("Skipping final face merge (skip_face_merge=True)")
+            result["merged_planar_faces"] = False
+        elif len(processed_meshes) > 1:
+            debug_print("Multi-object file - faces already merged per-solid")
+            result["merged_planar_faces"] = True
+            result["merged_per_solid"] = True
+        else:
+            debug_print(f"Skipping removeSplitter - mesh too large ({total_facets} facets)")
+            result["merged_planar_faces"] = False
+            result["skipped_merge_reason"] = f"Mesh too large ({total_facets} facets)"
+
+        debug_print("Adding object to document...")
+        obj = doc.addObject("Part::Feature", "Mesh")
+        obj.Shape = final
+
+        debug_print(f"Exporting to STEP: {output_path}")
+        Import.export([obj], output_path)
+        debug_print("Export command executed")
+
+        if not os.path.exists(output_path):
+            debug_print("ERROR: STEP file was not created")
+            result["error"] = "STEP export failed"
+            clean_exit(result)
+
+        output_size = os.path.getsize(output_path)
+        debug_print(f"SUCCESS! STEP file created: {output_size} bytes")
+
+        result["success"] = True
+        result["output_size"] = output_size
+
         try:
-            solid = Part.makeSolid(shape)
-            
-            # Merge planar faces on this solid NOW (before compound)
-            if not skip_face_merge and mesh.CountFacets <= 100000:
-                debug_print(f"Merging planar faces for solid {i+1}...")
-                # Use more aggressive tolerance for merging - multiply by 10
-                merge_tolerance = tolerance * 10.0
-                debug_print(f"Using merge tolerance: {merge_tolerance}")
-                solid, merged = merge_planar_faces(solid, merge_tolerance)
-                if merged:
-                    debug_print(f"Solid {i+1} faces merged successfully")
-            elif skip_face_merge:
-                debug_print(f"Skipping face merge for solid {i+1} (skip_face_merge=True)")
-            
-            solids.append(solid)
-            debug_print(f"Successfully created solid {i+1}")
-        except Exception as e:
-            debug_print(f"Could not create solid {i+1}: {e}, using shell instead")
-            shapes.append(shape)
-
-    # Create final object
-    if len(solids) > 0 and len(shapes) == 0:
-        # All meshes converted to solids
-        result["is_solid"] = True
-        if len(solids) == 1:
-            final = solids[0]
-            debug_print("Using single solid")
-        else:
-            # Create compound of all solids
-            debug_print(f"Creating compound of {len(solids)} solids...")
-            final = Part.makeCompound(solids)
-            debug_print("Compound created")
-    elif len(shapes) > 0 and len(solids) == 0:
-        # No solids, using shells
-        result["is_solid"] = False
-        if len(shapes) == 1:
-            final = shapes[0]
-            debug_print("Using single shell")
-        else:
-            debug_print(f"Creating compound of {len(shapes)} shells...")
-            final = Part.makeCompound(shapes)
-    else:
-        # Mixed solids and shells
-        result["is_solid"] = False
-        all_objects = solids + shapes
-        if len(all_objects) == 1:
-            final = all_objects[0]
-        else:
-            debug_print(f"Creating compound of {len(all_objects)} objects...")
-            final = Part.makeCompound(all_objects)
-
-    # For multi-object 3MF, faces were already merged per-solid
-    # Only try compound-level merge for single objects
-    if not skip_face_merge and len(processed_meshes) == 1 and total_facets <= 100000:
-        merge_tolerance = tolerance * 10.0
-        debug_print(f"Single object - merging with tolerance: {merge_tolerance}")
-        final, merged_ok = merge_planar_faces(final, merge_tolerance)
-        result["merged_planar_faces"] = merged_ok
-    elif skip_face_merge:
-        debug_print("Skipping final face merge (skip_face_merge=True)")
-        result["merged_planar_faces"] = False
-    elif len(processed_meshes) > 1:
-        debug_print("Multi-object file - faces already merged per-solid")
-        result["merged_planar_faces"] = True
-        result["merged_per_solid"] = True
-    else:
-        debug_print(f"Skipping removeSplitter - mesh too large ({total_facets} facets)")
-        result["merged_planar_faces"] = False
-        result["skipped_merge_reason"] = f"Mesh too large ({total_facets} facets)"
-
-    debug_print("Adding object to document...")
-    obj = doc.addObject("Part::Feature", "Mesh")
-    obj.Shape = final
-
-    debug_print(f"Exporting to STEP: {output_path}")
-    Import.export([obj], output_path)
-    debug_print("Export command executed")
-
-    if not os.path.exists(output_path):
-        debug_print("ERROR: STEP file was not created")
-        result["error"] = "STEP export failed"
-        clean_exit(result)
-
-    output_size = os.path.getsize(output_path)
-    debug_print(f"SUCCESS! STEP file created: {output_size} bytes")
-
-    result["success"] = True
-    result["output_size"] = output_size
-
-    try:
-        FreeCAD.closeDocument(doc.Name)
-    except:
-        pass
+            FreeCAD.closeDocument(doc.Name)
+        except:
+            pass
 
     debug_print("="*60)
     debug_print("CONVERSION COMPLETE")
@@ -609,7 +698,7 @@ def main():
 
     if len(sys.argv) < 4:
         os.dup2(ORIGINAL_STDOUT_FD, 1)
-        print("Usage: freecadcmd script.py input_file output_file [tolerance] [repair|no-repair] [format]")
+        print("Usage: freecadcmd script.py input_file output_file [tolerance] [repair|no-repair] [input_format] [skip-merge|merge] [output_format]")
         sys.exit(1)
 
     input_file = sys.argv[2]
@@ -618,11 +707,12 @@ def main():
     repair = sys.argv[5].lower() != 'no-repair' if len(sys.argv) > 5 else True
     input_format = sys.argv[6] if len(sys.argv) > 6 else 'stl'
     skip_face_merge = sys.argv[7].lower() == 'skip-merge' if len(sys.argv) > 7 else False
+    output_format = sys.argv[8] if len(sys.argv) > 8 else 'step'
     info_only = False
 
-    debug_print(f"Parsed: input={input_file}, output={output_file}, tol={tolerance}, repair={repair}, format={input_format}, skip_face_merge={skip_face_merge}")
+    debug_print(f"Parsed: input={input_file}, output={output_file}, tol={tolerance}, repair={repair}, input_format={input_format}, skip_face_merge={skip_face_merge}, output_format={output_format}")
 
-    convert(input_file, output_file, tolerance, repair, info_only, input_format, skip_face_merge)
+    convert(input_file, output_file, tolerance, repair, info_only, input_format, skip_face_merge, output_format)
 
 
 debug_print("Calling main() unconditionally (FreeCAD compatibility)")

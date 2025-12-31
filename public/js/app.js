@@ -78,6 +78,8 @@ class STLConverter {
     this.toleranceValue = document.getElementById('toleranceValue');
     this.repairMeshCheckbox = document.getElementById('repairMesh');
     this.skipFaceMergeCheckbox = document.getElementById('skipFaceMerge');
+    this.outputFormatSTL = document.getElementById('outputFormatSTL');
+    this.outputFormatSTEP = document.getElementById('outputFormatSTEP');
     this.previewSection = document.getElementById('previewSection');
     this.previewContainer = document.getElementById('previewContainer');
     this.previewCanvas = document.getElementById('previewCanvas');
@@ -355,9 +357,19 @@ class STLConverter {
   }
 
   async processFiles(files) {
-    // Preview the first file immediately
+    // Preview the first file immediately (only STL files)
     if (files.length > 0) {
-      this.previewSTL(files[0]);
+      const firstFile = files[0];
+      const is3MF = firstFile.name.toLowerCase().endsWith('.3mf');
+      
+      if (is3MF) {
+        // For 3MF files, show message that preview will be available after conversion
+        this.showToast('3MF preview will be available after conversion to STL', 'info');
+        // Don't hide the section, just don't try to preview
+      } else {
+        // STL files can be previewed immediately
+        this.previewSTL(firstFile);
+      }
     }
 
     // Upload all files for conversion
@@ -372,6 +384,7 @@ class STLConverter {
     formData.append('tolerance', this.toleranceInput.value);
     formData.append('repair', this.repairMeshCheckbox.checked);
     formData.append('skipFaceMerge', this.skipFaceMergeCheckbox.checked);
+    formData.append('outputFormat', this.outputFormatSTL.checked ? 'stl' : 'step');
 
     // Warn for large files
     if (file.size > 5 * 1024 * 1024) {
@@ -389,22 +402,29 @@ class STLConverter {
       if (data.success) {
         this.showToast(`Conversion started: ${file.name}`, 'success');
         
-        // Store file for preview
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          await this.saveSTLToIndexedDB(data.jobId, e.target.result, file.name);
-        };
-        reader.readAsArrayBuffer(file);
+        const outputFormat = this.outputFormatSTL.checked ? 'stl' : 'step';
+        const inputFormat = file.name.toLowerCase().endsWith('.3mf') ? '3mf' : 'stl';
+        
+        // Store file for preview (only for STL files - 3MF preview comes after conversion)
+        if (inputFormat === 'stl') {
+          const reader = new FileReader();
+          reader.onload = async (e) => {
+            await this.saveSTLToIndexedDB(data.jobId, e.target.result, file.name);
+          };
+          reader.readAsArrayBuffer(file);
+        }
 
         this.addJob({
           id: data.jobId,
           filename: file.name,
-          originalFilename: file.name,  // Also set originalFilename for consistency with server
+          originalFilename: file.name,
           status: 'queued',
           progress: 0,
           expiresAt: data.expiresAt,
           fileSize: file.size,
-          hasPreview: file.size <= 20 * 1024 * 1024, // Flag if preview available
+          inputFormat: inputFormat,
+          outputFormat: outputFormat,
+          hasPreview: inputFormat === 'stl' && file.size <= 20 * 1024 * 1024,
         });
         this.startPollingJob(data.jobId);
       } else {
@@ -482,6 +502,13 @@ class STLConverter {
 
           if (job.status === 'completed') {
             this.showToast(`Conversion completed: ${this.jobs.get(jobId)?.filename}`, 'success');
+            
+            // Fetch and preview converted STL files for 3MF inputs
+            const jobData = this.jobs.get(jobId);
+            if (jobData && jobData.inputFormat === '3mf' && job.outputFormat === 'stl') {
+              await this.fetchAndPreviewConvertedSTL(jobId);
+            }
+            
             return;
           }
 
@@ -556,7 +583,7 @@ class STLConverter {
           ` : ''}
           ${job.status === 'completed' ? `
             <button class="btn btn-success btn-sm" onclick="app.downloadJob('${job.id}')">
-              <i class="fas fa-download"></i> Download STEP
+              <i class="fas fa-download"></i> Download ${(job.outputFormat || 'step').toUpperCase()}
             </button>
           ` : ''}
           ${(job.status === 'queued' || job.status === 'processing') ? `
@@ -580,6 +607,18 @@ class STLConverter {
     
     if (!stlData) {
       this.showToast('Preview not available for this file', 'error');
+      return;
+    }
+    
+    // Skip 3MF files - they can't be previewed with this method
+    if (stlData.filename && stlData.filename.toLowerCase().endsWith('.3mf')) {
+      this.showToast('3MF preview not available. Please convert to STL first.', 'info');
+      return;
+    }
+    
+    // Check if data is valid
+    if (!stlData.data || !stlData.data.byteLength) {
+      this.showToast('Preview data is corrupted. Please re-upload.', 'error');
       return;
     }
 
@@ -612,6 +651,43 @@ class STLConverter {
       }
     } catch (err) {
       this.showToast('Failed to refresh job', 'error');
+    }
+  }
+
+  async fetchAndPreviewConvertedSTL(jobId) {
+    try {
+      const response = await fetch(`/api/download/${jobId}`);
+      if (!response.ok) {
+        console.error('Failed to fetch converted STL for preview');
+        return;
+      }
+
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer(); // Convert to ArrayBuffer
+      const jobData = this.jobs.get(jobId);
+      const filename = jobData?.originalFilename?.replace(/\.3mf$/i, '.stl') || 'converted.stl';
+      
+      // Store in IndexedDB for preview
+      await this.saveSTLToIndexedDB(jobId, arrayBuffer, filename);
+      
+      // Update job to mark preview as available
+      this.updateJob(jobId, { hasPreview: true });
+      
+      // If this is the most recent job, show the preview
+      const jobs = Array.from(this.jobs.values());
+      const mostRecent = jobs.sort((a, b) => 
+        new Date(b.createdAt) - new Date(a.createdAt)
+      )[0];
+      
+      if (mostRecent?.id === jobId) {
+        // Show preview for the most recently completed job
+        const file = new File([arrayBuffer], filename, { type: 'application/octet-stream' });
+        this.previewSTL(file);
+        this.showToast('3D preview ready', 'success');
+      }
+    } catch (err) {
+      console.error('Failed to fetch converted STL:', err);
+      // Silent fail - preview is optional
     }
   }
 
@@ -693,6 +769,9 @@ class STLConverter {
   }
 
   previewSTL(file) {
+    // Always show preview section when previewing
+    this.previewSection.style.display = 'flex';
+    
     this.showToast('Loading 3D preview...', 'info');
 
     const reader = new FileReader();
@@ -702,39 +781,15 @@ class STLConverter {
       try {
         let geometry;
         
+        // Only support STL files
         if (fileName.endsWith('.3mf')) {
-          // Load 3MF
-          const loader = new THREE.ThreeMFLoader();
-          const object = loader.parse(e.target.result);
-          
-          // Extract geometry from first mesh found
-          let mesh = null;
-          object.traverse((child) => {
-            if (child.isMesh && !mesh) {
-              mesh = child;
-            }
-          });
-          
-          if (!mesh) {
-            throw new Error('No mesh found in 3MF file');
-          }
-          
-          geometry = mesh.geometry;
-          
-          // Remove vertex colors if they exist - they override material color and cause black appearance
-          if (geometry.attributes.color) {
-            geometry.deleteAttribute('color');
-          }
-          
-          // Ensure normals exist for proper lighting
-          if (!geometry.attributes.normal) {
-            geometry.computeVertexNormals();
-          }
-        } else {
-          // Load STL
-          const loader = new THREE.STLLoader();
-          geometry = loader.parse(e.target.result);
+          this.showToast('3MF preview not supported. Convert to STL first.', 'error');
+          return;
         }
+        
+        // Load STL
+        const loader = new THREE.STLLoader();
+        geometry = loader.parse(e.target.result);
 
         // Remove existing mesh
         if (this.mesh) {
@@ -743,10 +798,9 @@ class STLConverter {
           this.mesh.material.dispose();
         }
 
-        // Create material - use brighter color for 3MF
-        const is3MF = fileName.endsWith('.3mf');
+        // Create material
         const material = new THREE.MeshPhongMaterial({
-          color: is3MF ? 0x00ff88 : 0x1d9bf0,  // Bright green for 3MF, blue for STL
+          color: 0x1d9bf0,  // Blue for STL
           specular: 0x444444,
           shininess: 30,
           flatShading: false,

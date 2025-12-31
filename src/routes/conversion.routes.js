@@ -78,6 +78,10 @@ router.post(
       .optional()
       .isBoolean()
       .withMessage('skipFaceMerge must be a boolean'),
+    body('outputFormat')
+      .optional()
+      .isIn(['stl', 'step'])
+      .withMessage('outputFormat must be either "stl" or "step"'),
   ],
   async (req, res) => {
     try {
@@ -97,7 +101,9 @@ router.post(
 
       const jobId = req.jobId;
       const inputPath = req.file.path;
-      const outputPath = fileService.getConvertedPath(`${jobId}.step`);
+      const outputFormat = req.body.outputFormat || 'step';  // Default to STEP
+      const outputExtension = outputFormat === 'stl' ? '.stl' : '.step';
+      const outputPath = fileService.getConvertedPath(`${jobId}${outputExtension}`);
 
       const options = {
         tolerance: parseFloat(req.body.tolerance) || config.conversion.defaultTolerance,
@@ -105,6 +111,7 @@ router.post(
         skipFaceMerge: req.body.skipFaceMerge === 'true',
         originalFilename: req.file.originalname,
         inputFormat: path.extname(req.file.originalname).toLowerCase().substring(1), // 'stl' or '3mf'
+        outputFormat: outputFormat,
       };
 
       // Create job record
@@ -116,6 +123,7 @@ router.post(
         originalFilename: req.file.originalname,
         fileSize: req.file.size,
         inputFormat: options.inputFormat,
+        outputFormat: options.outputFormat,
         options,
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
@@ -250,9 +258,11 @@ router.get(
         });
       }
 
-      const stepPath = fileService.getConvertedPath(`${jobId}.step`);
+      const outputFormat = job.outputFormat || 'step';  // Default to STEP for backward compatibility
+      const outputExtension = outputFormat === 'stl' ? '.stl' : '.step';
+      const outputPath = fileService.getConvertedPath(`${jobId}${outputExtension}`);
 
-      if (!(await fileService.fileExists(stepPath))) {
+      if (!(await fileService.fileExists(outputPath))) {
         return res.status(404).json({
           success: false,
           error: 'Converted file not found',
@@ -261,11 +271,11 @@ router.get(
 
       // Generate download filename
       const originalName = job.originalFilename || 'converted';
-      const downloadName = originalName.replace(/\.(stl|3mf)$/i, '') + '.step';
+      const downloadName = originalName.replace(/\.(stl|3mf)$/i, '') + outputExtension;
 
       logger.info(`File download: ${jobId}`, { downloadName });
 
-      res.download(stepPath, downloadName);
+      res.download(outputPath, downloadName);
 
     } catch (err) {
       logger.error('Download error:', err);

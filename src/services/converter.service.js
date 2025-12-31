@@ -52,6 +52,7 @@ class ConverterService {
     const repair = options.repair !== false;
     const skipFaceMerge = options.skipFaceMerge === true;
     const inputFormat = options.inputFormat || 'stl'; // Default to STL
+    const outputFormat = options.outputFormat || 'step'; // Default to STEP
 
     try {
       await fs.access(inputPath);
@@ -69,13 +70,15 @@ class ConverterService {
       tolerance.toString(),
       repair ? 'repair' : 'no-repair',
       inputFormat,
-      skipFaceMerge ? 'skip-merge' : 'merge'
+      skipFaceMerge ? 'skip-merge' : 'merge',
+      outputFormat
     ];
 
     logger.info("Running FreeCAD conversion", { 
       cmd: FREECAD, 
       args, 
-      format: inputFormat 
+      inputFormat,
+      outputFormat
     });
 
     const proc = spawn(FREECAD, args, {
@@ -99,7 +102,8 @@ class ConverterService {
       proc.on('close', (code) => {
         logger.info("Process closed", { 
           code, 
-          format: inputFormat,
+          inputFormat,
+          outputFormat,
           stdoutLen: stdout.length, 
           stderrLen: stderr.length 
         });

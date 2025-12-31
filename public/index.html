@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>STL/3MF to STEP Converter</title>
+  <title>STL/3MF Converter - Export to STEP or STL</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -47,6 +47,29 @@
           <!-- Conversion Options -->
           <div class="options-panel">
             <h3><i class="fas fa-sliders-h"></i> Conversion Options</h3>
+            
+            <!-- Output Format Selection -->
+            <div class="option-group">
+              <label>
+                Output Format
+                <span class="tooltip" title="Choose the output file format. STL is faster and preserves mesh, STEP creates solid geometry.">
+                  <i class="fas fa-info-circle"></i>
+                </span>
+              </label>
+              <div class="radio-group">
+                <label class="radio-label">
+                  <input type="radio" name="outputFormat" value="stl" id="outputFormatSTL">
+                  <span class="radio-checkmark"></span>
+                  STL (faster, mesh format)
+                </label>
+                <label class="radio-label">
+                  <input type="radio" name="outputFormat" value="step" id="outputFormatSTEP" checked>
+                  <span class="radio-checkmark"></span>
+                  STEP (CAD solid format)
+                </label>
+              </div>
+            </div>
+
             <div class="option-group">
               <label for="tolerance">
                 Tolerance (edge merging precision)
