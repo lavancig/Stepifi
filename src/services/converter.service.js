@@ -5,14 +5,12 @@ const fsSync = require('fs');
 const config = require('../config');
 const logger = require('../utils/logger');
 
-const FREECAD = '/opt/conda/bin/freecadcmd';
+const FREECAD = '/usr/bin/FreeCADCmd';
 
 const FREECAD_ENV = {
   ...process.env,
   QT_QPA_PLATFORM: 'offscreen',
   XDG_RUNTIME_DIR: '/tmp/runtime',
-  CONDA_PREFIX: '/opt/conda',
-  LD_LIBRARY_PATH: '/opt/conda/lib'
 };
 
 class ConverterService {

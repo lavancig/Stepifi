@@ -1,0 +1,13 @@
+FROM alpine:edge
+
+RUN apk add --no-cache redis
+
+RUN mkdir -p /data
+VOLUME /data
+WORKDIR /data
+
+EXPOSE 6379
+
+HEALTHCHECK CMD redis-cli ping
+
+CMD ["redis-server", "--appendonly", "yes", "--protected-mode", "no"]

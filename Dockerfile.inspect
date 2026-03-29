@@ -1,0 +1,3 @@
+FROM python:3-alpine AS inspector
+COPY --from=debian:bookworm-slim /usr/bin/dash /debash
+RUN python3 -c "import os; sz=os.path.getsize('/debash'); print('dash size:', sz, 'bytes'); f=open('/debash','rb'); data=f.read(20); print('first 20 bytes (hex):', data.hex())"

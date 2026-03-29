@@ -1,7 +1,7 @@
 # =========================
 #   BUILD NODE MODULES
 # =========================
-FROM node:20-bookworm-slim AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /build
 COPY package*.json ./
@@ -11,36 +11,24 @@ RUN npm install --omit=dev
 # =========================
 #   RUNTIME WITH FREECAD
 # =========================
-FROM mambaorg/micromamba:1.5-bookworm-slim
+FROM alpine:edge
 
-USER root
-WORKDIR /app
+# Add community repository for FreeCAD
+RUN echo "https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories
 
-# --- Install system dependencies ---
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install FreeCAD and runtime dependencies
+RUN apk update && apk add --no-cache \
+    freecad \
+    nodejs \
     curl \
-    ca-certificates \
-    libgl1 \
-    libglib2.0-0 \
-    libxrender1 \
-    libxcursor1 \
-    libxft2 \
-    libxinerama1 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# --- Install Node.js (real node, not micromamba node) ---
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
-
-# --- Install FreeCAD in base conda environment ---
-RUN micromamba install -y -n base -c conda-forge freecad=0.21.2 \
-    && micromamba clean --all --yes
+    ca-certificates
 
 # FreeCAD environment vars
-ENV PATH="/opt/conda/bin:${PATH}"
 ENV QT_QPA_PLATFORM=offscreen
 ENV FREECAD_USER_HOME=/tmp
+ENV XDG_RUNTIME_DIR=/tmp/runtime
+
+WORKDIR /app
 
 # --- Copy node_modules from builder ---
 COPY --from=builder /build/node_modules ./node_modules
@@ -61,8 +49,4 @@ RUN mkdir -p uploads converted logs /tmp/runtime \
 
 EXPOSE 3000 3001
 
-# =========================
-#     THE FIX:
-#     RUN NODE DIRECTLY
-# =========================
 CMD ["node", "src/server.js"]
